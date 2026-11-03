@@ -1,0 +1,331 @@
+
+<!DOCTYPE html>
+<html>
+	<head>
+		<meta charset="utf-8">
+		<link rel="preload" as="image" href="background.jpg" fetchpriority="high">
+		<title>MCClone</title>
+		<link rel="shortcut icon" type="image/ico" href="https://gamebackup.github.io/standalone_games_3/mcclone/favicon.ico">
+	</head>
+	<style>
+    @import url('https://fonts.googleapis.com/css2?family=Poppins:wght@500&display=swap');
+		html, body {
+			margin: 0;
+			background: #000;
+		}
+		body {
+			overflow: hidden; 
+		}
+		.world-select {
+			width: 99vw;
+			min-width: 300px;
+			height: calc(100vh - 220px);
+			position: absolute;
+			bottom: 120px;
+			overflow-y: auto;
+			background-color: RGBA(0, 0, 0, 0.6);
+			justify-content: center;
+			margin: 0 auto;
+		}
+		.world {
+			width: 250px;
+			height: auto;
+			border: 1px solid black;
+			font-size: 18px;
+			font-family: "Poppins", sans-serif;
+			color: rgb(180, 180, 180);
+			margin: 0 auto;
+			margin-top: 15px;
+			padding: 5px;
+			cursor: pointer;
+		}
+		strong {
+			color: white;
+		}
+		.selected {
+			border: 3px solid white;
+			padding: 3px;
+		}
+		input[type=text] {
+			background-color: black;
+			caret-color: white;
+			border: 2px solid gray;
+			color: white;
+			font-size: 24px;
+			padding-left: 12px;
+		}
+		input[type=text]:focus {
+			border: 2px solid lightgray;
+		}
+		#boxcentertop {
+			z-index: 1;
+			width: 80vw;
+			max-width: 400px;
+			height: 50px;
+			/* Keep the focused input out of page flow. In flow it gives the
+			   black body a 56px height, which paints a strip over the WebGL
+			   canvas while the command bar is open. */
+			position: fixed;
+			top: 30px;
+			left: 50%;
+			transform: translateX(-50%);
+			display: block;
+			margin: 0;
+		}
+		/* The same input is used for world names and save codes; only the
+		   in-game command/chat bar moves to Minecraft's bottom-left corner. */
+		#boxcentertop.command-box {
+			top: auto;
+			bottom: 10px;
+			left: 10px;
+			transform: none;
+			width: min(400px, calc(100vw - 20px));
+			max-width: none;
+		}
+		.hidden {
+			display: none !important;
+		}
+		#onhover {
+			background-color: rgba(0, 0, 0, 0.9);
+			color: rgb(200, 200, 200);
+			font-family: 'Poppins', sans-serif;
+			word-wrap: normal;
+			width: auto;
+			max-width: 400px;
+			position: absolute;
+			z-index: 1;
+			padding: 10px;
+			cursor: default;
+		}
+		#quota {
+			display: block;
+			position: absolute;
+			width: 99vw;
+			margin: 0 auto;
+			bottom: 110px;
+			z-index: 1;
+			background-color: RGBA(0, 0, 0, 0.6);
+			justify-content: center;
+			text-align: center;
+			color: white;
+      font-family: 'Poppins', sans-serif;
+		}
+	</style>
+	<body>
+	<canvas id="overlay" tabindex="0" width="600" height="600" style="position: absolute; top: 0px; left: 0px"></canvas>
+	<input type="text" id="savebox" class="hidden" spellcheck="false" style="position: absolute; top: 10px; left: 10px; z-index: 1;">
+	<input type="text" id="boxcentertop" class="hidden" spellcheck="false">
+	<div id="quota" class="hidden"></div>
+	<div id="onhover" class="hidden"></div>
+	<p id="savedirections" class="hidden" style="position: absolute; top: 40px; left: 10px; z-index: 1; background-color: rgba(255, 255, 255, 0.3);">
+		JSCRAFT!
+	</p>
+	<div class="world-select hidden" id="worlds"></div>
+	<p id="message" class="hidden" style="position: absolute; top: 10px; right: 10px; z-index: 1; text-align: right; background-color: rgba(255, 255, 255, 0.3);"></p>
+	<script>
+		
+		var loadString = ""
+	</script>
+	<script type="x-shader/vertex" id="blockVertexShader">
+		attribute vec3  aVertex;
+		attribute vec2  aTexture;
+		attribute float aShadow;
+		varying vec2  vTexture;
+		varying float vShadow;
+		varying float vFog;
+		varying vec3  vPosition;
+		uniform mat4 uView;
+		uniform float uDist;
+		uniform vec3 uPos;
+		uniform vec2 uLineOffset;
+		uniform float uSkyBrightness;
+
+		void main(void) {
+			vTexture = aTexture;
+			vPosition = uPos - aVertex;
+			vShadow = (aShadow > 0.0 ? aShadow : 1.0) * uSkyBrightness;
+			gl_Position = uView * vec4( aVertex, 1.0);
+			gl_Position.xy += uLineOffset * gl_Position.w;
+
+			float range = max(uDist / 5.0, 8.0);
+			vFog = clamp((length(uPos.xz - aVertex.xz) - uDist + range) / range, 0.0, 1.0);
+		}
+	</script>
+	<script type="x-shader/fragment" id="blockFragmentShader">
+		#ifdef GL_FRAGMENT_PRECISION_HIGH
+			precision highp float;
+		#else
+			precision mediump float;
+		#endif
+
+		uniform sampler2D uSampler;
+		uniform vec3 uSky;
+		uniform vec3 uSun;
+		uniform float uSkyBrightness;
+		varying float vShadow;
+		varying vec2 vTexture;
+		varying float vFog;
+		varying vec3 vPosition;
+
+		const vec3 skyColor = vec3(0.47, 0.65, 1.0);
+
+		void main(void){
+			vec3 dir = normalize(vPosition);
+			float horizonal = 1.0 - abs(dir.y);
+			float sunDot = dot(dir, uSun);
+			vec3 sky = mix(skyColor, uSky, horizonal * horizonal * (sunDot * 0.5 + 1.2)) * uSkyBrightness;
+
+			vec4 color = texture2D(uSampler, vTexture);
+			vec3 rgb = mix(color.rgb * vShadow, sky, vFog);
+			gl_FragColor = vec4(rgb, color.a);
+			if (gl_FragColor.a == 0.0) discard;
+		}
+	</script>
+	<script type="x-shader/vertex" id="2dVertexShader">
+		attribute vec2 aVertex;
+		attribute vec2 aTexture;
+		attribute float aShadow;
+		varying vec2 vTexture;
+		varying float vShadow;
+
+		void main(void) {
+			vTexture = aTexture;
+			vShadow = aShadow;
+			gl_Position = vec4(aVertex, 0.5, 1.0);
+		}
+	</script>
+	<script type="x-shader/fragment" id="2dFragmentShader">
+		#ifdef GL_FRAGMENT_PRECISION_HIGH
+			precision highp float;
+		#else
+			precision mediump float;
+		#endif
+
+		uniform sampler2D uSampler;
+		varying vec2 vTexture;
+		varying float vShadow;
+
+		void main(void) {
+			vec4 color = texture2D(uSampler, vTexture);
+			gl_FragColor = vec4(color.rgb * vShadow, color.a);
+			if (gl_FragColor.a == 0.0) discard;
+		}
+	</script>
+	<script type="x-shader/vertex" id="skyVertexShader">
+		attribute vec3 aVertex;
+		uniform mat4 uView;
+		varying vec3 position;
+
+		mat4 no_translate (mat4 mat) {
+			mat4 nmat = mat;
+			nmat[3].xyz = vec3(0.0);
+			return nmat;
+		}
+
+		void main(void) {
+			// The cube is rendered at -aVertex, so use that same direction when
+			// shading. The old positive mirror placed the sun and moon on the
+			// opposite side of the sky.
+			position = -aVertex;
+			gl_Position = no_translate(uView) * vec4(aVertex * -100.0, 0.0);
+		}
+	</script>
+	<script type="x-shader/fragment" id="skyFragmentShader">
+		#ifdef GL_FRAGMENT_PRECISION_HIGH
+			precision highp float;
+		#else
+			precision mediump float;
+		#endif
+
+		uniform float uTime;
+		uniform vec3 uSun;
+		uniform vec3 uHorizon;
+		uniform vec3 uZenith;
+		uniform float uNight;
+		uniform float uTwilight;
+		uniform sampler2D uCelestial;
+		uniform float uMoonPhase;
+		uniform float uHasCelestial;
+		varying vec3 position;
+
+		float hash31(vec3 p) {
+			p = fract(p * 0.1031);
+			p += dot(p, p.yzx + 33.33);
+			return fract((p.x + p.y) * p.z);
+		}
+
+		void main(void) {
+			vec3 dir = normalize(position);
+			float up = clamp(dir.y, 0.0, 1.0);
+			vec3 col = mix(uHorizon, uZenith, smoothstep(0.0, 0.55, up));
+
+			// Warm sunrise/sunset band, strongest toward the sun.
+			vec2 sunFlat = uSun.xz;
+			float sunFlatLength = length(sunFlat);
+			if (sunFlatLength > 0.0001) sunFlat /= sunFlatLength;
+			else sunFlat = vec2(0.0);
+			vec2 dirFlat = dir.xz;
+			float dirFlatLength = length(dirFlat);
+			if (dirFlatLength > 0.0001) dirFlat /= dirFlatLength;
+			else dirFlat = vec2(0.0);
+			float sunSide = max(dot(dirFlat, sunFlat), 0.0);
+			float horizonBand = pow(max(0.0, 1.0 - abs(dir.y)), 6.0);
+			col += vec3(1.0, 0.42, 0.12) * horizonBand * uTwilight * (0.18 + 0.42 * pow(sunSide, 3.0));
+
+			// Minecraft's stars rotate with the celestial sphere and fade in
+			// only once the sun is below the horizon.
+			float starAngle = uTime * 0.0104719755;
+			float starCos = cos(starAngle);
+			float starSin = sin(starAngle);
+			vec3 starDir = vec3(
+				starCos * dir.x - starSin * dir.y,
+				starSin * dir.x + starCos * dir.y,
+				dir.z
+			);
+			vec3 starPos = starDir * 180.0;
+			vec3 cell = floor(starPos);
+			vec3 cellOffset = fract(starPos) - 0.5;
+			float star = step(0.997, hash31(cell));
+			star *= 1.0 - smoothstep(0.03, 0.20, length(cellOffset));
+			star *= smoothstep(0.02, 0.12, dir.y) * uNight;
+			col += vec3(0.85, 0.90, 1.0) * star;
+
+			if (uHasCelestial > 0.5) {
+				float sunSize = 0.085;
+				float moonSize = 0.07;
+
+				vec3 sunRight = abs(uSun.y) < 0.999 ? normalize(cross(uSun, vec3(0.0, 1.0, 0.0))) : vec3(1.0, 0.0, 0.0);
+				vec3 sunUp = cross(sunRight, uSun);
+				float sunDist = dot(dir, uSun);
+				if (sunDist > 0.0) {
+					vec2 local = vec2(dot(dir / sunDist, sunRight), dot(dir / sunDist, sunUp)) / (2.0 * sunSize);
+					if (abs(local.x) <= 1.0 && abs(local.y) <= 1.0) {
+						vec2 uv = local * 0.5 + 0.5;
+						vec4 sunTex = texture2D(uCelestial, uv * 0.25);
+						col += sunTex.rgb;
+					}
+				}
+
+				vec3 moonDir = -uSun;
+				vec3 moonRight = abs(moonDir.y) < 0.999 ? normalize(cross(moonDir, vec3(0.0, 1.0, 0.0))) : vec3(1.0, 0.0, 0.0);
+				vec3 moonUp = cross(moonRight, moonDir);
+				float moonDist = dot(dir, moonDir);
+				if (moonDist > 0.0) {
+					vec2 local = vec2(dot(dir / moonDist, moonRight), dot(dir / moonDist, moonUp)) / (2.0 * moonSize);
+					if (abs(local.x) <= 1.0 && abs(local.y) <= 1.0) {
+						vec2 uv = local * 0.5 + 0.5;
+						float mcol = mod(uMoonPhase, 4.0);
+						float mrow = floor(uMoonPhase / 4.0);
+						vec2 muv = vec2((mcol + uv.x) * 0.25, 0.25 + (mrow + uv.y) * 0.25);
+						vec4 moonTex = texture2D(uCelestial, muv);
+						col += moonTex.rgb;
+					}
+				}
+			}
+
+			gl_FragColor = vec4(col, 1.0);
+		}
+	</script>
+	<script type="module" src="./src/main.js"></script>
+	</body>
+</html>
